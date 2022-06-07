@@ -3,6 +3,7 @@
 
 module Main where
 
+import Control.Monad
 import Control.Monad.IO.Class
 import Data.Char
 import Data.Function
@@ -12,47 +13,71 @@ import System.Console.CmdArgs
 import System.Directory
 import System.Environment
 
-data Args = Args {all_ :: Bool, almostAll :: Bool, path :: [FilePath]} deriving (Show, Data, Typeable)
+data Args = Args
+    { all_ :: Bool
+    , almostAll :: Bool
+    , reverse_ :: Bool
+    , directory :: Bool
+    , path :: [FilePath]
+    }
+    deriving (Show, Data, Typeable)
 
 defaultArgs =
     Args
         { all_ = False &= name "a" &= help "do not ignore entries starting with ."
         , almostAll = False &= name "A" &= help "do not list implied . and .."
+        , reverse_ = False &= name "r" &= help "reverse order while sorting"
+        , directory = False &= name "d" &= help "list directories themselves, not their contents"
         , path = [] &= args &= typFile
         }
 
 -- TODO: args
+-- --recursive: recurse into subdirectories (could expand to tree)
+-- -l
+-- --color[=WHEN]
+-- ...
 main :: IO ()
 main = do
     args <- cmdArgs defaultArgs
-    let f = constructF args
+    -- TODO: there has to be a nicer way to write
+    --                                      this
+    let cmd = (\filepath -> ls (lsCmd args) (colorF filepath args <=< sorterF args <=< hiddenF args) filepath)
     case length (path args) of
-        0 -> ls f "."
-        1 -> ls f $ head (path args)
-        _ -> mapM_ liftIO $ intersperse (putStrLn "") $ map (\p -> putStrLn (p ++ ":") >> ls f p) (path args)
+        0 -> cmd "."
+        1 -> cmd $ head (path args)
+        _ -> mapM_ liftIO $ intersperse (putStrLn "") $ map (\p -> putStrLn (p ++ ":") >> cmd p) (path args)
 
-constructF :: Args -> ([FilePath] -> [FilePath])
-constructF args
-    | almostAll args = sortCaseInsensitive . filter (not . isImpliedEntry)
-    | all_ args = sortCaseInsensitive
-    | otherwise = defaultF
+sorterF :: Args -> ([FilePath] -> IO [FilePath])
+sorterF args
+    | reverse_ args = return . reverse . sortCaseInsensitive
+    | otherwise = return . sortCaseInsensitive
+  where
+    -- TODO: handle multi line
+    -- also GNU ls sorts hidden files last
+    sortCaseInsensitive = sortBy (compare `on` map toLower)
 
-ls :: ([FilePath] -> [FilePath]) -> FilePath -> IO ()
-ls f filepath = getDirectoryContents filepath >>= (mapM (colorEntry filepath) . f) >>= (mapM_ putStr . intersperse "  ") >> putStrLn ""
+hiddenF :: Args -> ([FilePath] -> IO [FilePath])
+hiddenF args
+    | almostAll args = return . filter (not . isImpliedEntry)
+    | all_ args = return
+    | otherwise = return . filter (not . isHidden)
+  where
+    isHidden ('.' : _) = True
+    isHidden _ = False
+    isImpliedEntry filepath = (filepath == ".") || (filepath == "..")
 
-defaultF :: [FilePath] -> [FilePath]
-defaultF = sortCaseInsensitive . filter (not . isHidden)
+colorF :: FilePath -> Args -> ([FilePath] -> IO [FilePath])
+colorF filepath args
+    | directory args = mapM $ colorEntry ""
+    | otherwise = mapM $ colorEntry filepath
 
-isHidden :: FilePath -> Bool
-isHidden ('.' : _) = True
-isHidden _ = False
+lsCmd :: Args -> (FilePath -> IO [FilePath])
+lsCmd args
+    | directory args = return . return
+    | otherwise = getDirectoryContents
 
-isImpliedEntry :: FilePath -> Bool
-isImpliedEntry filepath = (filepath == ".") || (filepath == "..")
-
--- TODO: handle multi line
-sortCaseInsensitive :: [String] -> [String]
-sortCaseInsensitive = sortBy (compare `on` map toLower)
+ls :: (FilePath -> IO [FilePath]) -> ([FilePath] -> IO [FilePath]) -> FilePath -> IO ()
+ls cmd f filepath = cmd filepath >>= f >>= (mapM_ putStr . intersperse "  ") >> putStrLn ""
 
 colorEntry :: FilePath -> FilePath -> IO FilePath
 colorEntry root filename = do
