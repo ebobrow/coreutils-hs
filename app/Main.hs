@@ -3,6 +3,7 @@
 
 module Main where
 
+import Control.Monad.IO.Class
 import Data.Char
 import Data.Function
 import Data.Functor
@@ -11,21 +12,24 @@ import System.Console.CmdArgs
 import System.Directory
 import System.Environment
 
-data Args = Args {all_ :: Bool, almostAll :: Bool, path :: FilePath} deriving (Show, Data, Typeable)
+data Args = Args {all_ :: Bool, almostAll :: Bool, path :: [FilePath]} deriving (Show, Data, Typeable)
 
 defaultArgs =
     Args
         { all_ = False &= name "a" &= help "do not ignore entries starting with ."
         , almostAll = False &= name "A" &= help "do not list implied . and .."
-        , path = "." &= args &= typFile -- TODO: multiple files
+        , path = [] &= args &= typFile
         }
 
 -- TODO: args
 main :: IO ()
 main = do
     args <- cmdArgs defaultArgs
-    ls (constructF args) $ path args
-    putStrLn ""
+    let f = constructF args
+    case length (path args) of
+        0 -> ls f "."
+        1 -> ls f $ head (path args)
+        _ -> mapM_ liftIO $ intersperse (putStrLn "") $ map (\p -> putStrLn (p ++ ":") >> ls f p) (path args)
 
 constructF :: Args -> ([FilePath] -> [FilePath])
 constructF args
@@ -34,10 +38,7 @@ constructF args
     | otherwise = defaultF
 
 ls :: ([FilePath] -> [FilePath]) -> FilePath -> IO ()
-ls f filepath = getDirectoryContents filepath >>= (mapM (colorEntry filepath) . f) >>= (mapM_ putStr . intersperse "  ")
-
-lsDefault :: FilePath -> IO ()
-lsDefault = ls (sortCaseInsensitive . filter (not . isHidden))
+ls f filepath = getDirectoryContents filepath >>= (mapM (colorEntry filepath) . f) >>= (mapM_ putStr . intersperse "  ") >> putStrLn ""
 
 defaultF :: [FilePath] -> [FilePath]
 defaultF = sortCaseInsensitive . filter (not . isHidden)
@@ -49,6 +50,7 @@ isHidden _ = False
 isImpliedEntry :: FilePath -> Bool
 isImpliedEntry filepath = (filepath == ".") || (filepath == "..")
 
+-- TODO: handle multi line
 sortCaseInsensitive :: [String] -> [String]
 sortCaseInsensitive = sortBy (compare `on` map toLower)
 
