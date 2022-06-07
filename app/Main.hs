@@ -1,30 +1,53 @@
+{-# LANGUAGE DeriveDataTypeable #-}
+{-# OPTIONS_GHC -fno-cse #-}
+
 module Main where
 
 import Data.Char
 import Data.Function
 import Data.Functor
 import Data.List
+import System.Console.CmdArgs
 import System.Directory
 import System.Environment
+
+data Args = Args {all_ :: Bool, almostAll :: Bool, path :: FilePath} deriving (Show, Data, Typeable)
+
+defaultArgs =
+    Args
+        { all_ = False &= name "a" &= help "do not ignore entries starting with ."
+        , almostAll = False &= name "A" &= help "do not list implied . and .."
+        , path = "." &= args &= typFile -- TODO: multiple files
+        }
 
 -- TODO: args
 main :: IO ()
 main = do
-    args <- getArgs
-    if null args
-        then lsDefault "."
-        else lsDefault $ head args
+    args <- cmdArgs defaultArgs
+    ls (constructF args) $ path args
     putStrLn ""
 
-ls :: [[FilePath] -> [FilePath]] -> FilePath -> IO ()
-ls fs filepath = listDirectory filepath >>= (mapM (colorEntry filepath) . foldr1 (.) fs) >>= (mapM_ putStr . intersperse "  ")
+constructF :: Args -> ([FilePath] -> [FilePath])
+constructF args
+    | almostAll args = sortCaseInsensitive . filter (not . isImpliedEntry)
+    | all_ args = sortCaseInsensitive
+    | otherwise = defaultF
+
+ls :: ([FilePath] -> [FilePath]) -> FilePath -> IO ()
+ls f filepath = getDirectoryContents filepath >>= (mapM (colorEntry filepath) . f) >>= (mapM_ putStr . intersperse "  ")
 
 lsDefault :: FilePath -> IO ()
-lsDefault = ls [sortCaseInsensitive, filter (not . isHidden)]
+lsDefault = ls (sortCaseInsensitive . filter (not . isHidden))
+
+defaultF :: [FilePath] -> [FilePath]
+defaultF = sortCaseInsensitive . filter (not . isHidden)
 
 isHidden :: FilePath -> Bool
 isHidden ('.' : _) = True
 isHidden _ = False
+
+isImpliedEntry :: FilePath -> Bool
+isImpliedEntry filepath = (filepath == ".") || (filepath == "..")
 
 sortCaseInsensitive :: [String] -> [String]
 sortCaseInsensitive = sortBy (compare `on` map toLower)
