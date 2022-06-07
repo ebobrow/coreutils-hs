@@ -39,13 +39,17 @@ defaultArgs =
 main :: IO ()
 main = do
     args <- cmdArgs defaultArgs
-    -- TODO: there has to be a nicer way to write
-    --                                      this
-    let cmd = (\filepath -> ls (lsCmd args) (colorF filepath args <=< sorterF args <=< hiddenF args) filepath)
+    let cmd = genCmd args
     case length (path args) of
         0 -> cmd "."
         1 -> cmd $ head (path args)
         _ -> mapM_ liftIO $ intersperse (putStrLn "") $ map (\p -> putStrLn (p ++ ":") >> cmd p) (path args)
+
+genCmd :: Args -> FilePath -> IO ()
+genCmd args filepath = ls (lsCmd args) (chainFs args) filepath
+  where
+    chainFs args = foldr1 (<=<) $ map ($ args) fs
+    fs = [colorF filepath, sorterF, hiddenF]
 
 sorterF :: Args -> ([FilePath] -> IO [FilePath])
 sorterF args
