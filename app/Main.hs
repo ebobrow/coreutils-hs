@@ -13,11 +13,15 @@ import System.Console.CmdArgs
 import System.Directory
 import System.Environment
 
+data Color = NEVER | ALWAYS | AUTO deriving (Show, Enum, Data, Eq)
+
 data Args = Args
     { all_ :: Bool
     , almostAll :: Bool
     , reverse_ :: Bool
     , directory :: Bool
+    , l :: Bool
+    , color :: Color
     , path :: [FilePath]
     }
     deriving (Show, Data, Typeable)
@@ -28,6 +32,8 @@ defaultArgs =
         , almostAll = False &= name "A" &= help "do not list implied . and .."
         , reverse_ = False &= name "r" &= help "reverse order while sorting"
         , directory = False &= name "d" &= help "list directories themselves, not their contents"
+        , l = False &= help "use a long listing format"
+        , color = NEVER &= typ "WHEN" &= help "color the output WHEN"
         , path = [] &= args &= typFile
         }
 
@@ -46,8 +52,11 @@ main = do
         _ -> mapM_ liftIO $ intersperse (putStrLn "") $ map (\p -> putStrLn (p ++ ":") >> cmd p) (path args)
 
 genCmd :: Args -> FilePath -> IO ()
-genCmd args filepath = ls (lsCmd args) (chainFs args) filepath
+genCmd args filepath = lsF (lsCmd args) (chainFs args) filepath
   where
+    lsF
+        | l args = lsLong
+        | otherwise = ls
     chainFs args = foldr1 (<=<) $ map ($ args) fs
     fs = [colorF filepath, sorterF, hiddenF]
 
@@ -71,9 +80,11 @@ hiddenF args
     isImpliedEntry filepath = (filepath == ".") || (filepath == "..")
 
 colorF :: FilePath -> Args -> ([FilePath] -> IO [FilePath])
-colorF filepath args
-    | directory args = mapM $ colorEntry ""
-    | otherwise = mapM $ colorEntry filepath
+-- TODO: color=AUTO
+colorF root args =
+    if color args == ALWAYS
+        then if directory args then mapM $ colorEntry "" else mapM $ colorEntry root
+        else return
 
 lsCmd :: Args -> (FilePath -> IO [FilePath])
 lsCmd args
@@ -81,7 +92,32 @@ lsCmd args
     | otherwise = getDirectoryContents
 
 ls :: (FilePath -> IO [FilePath]) -> ([FilePath] -> IO [FilePath]) -> FilePath -> IO ()
-ls cmd f filepath = cmd filepath >>= f >>= (mapM_ putStr . intersperse "  ") >> putStrLn ""
+ls cmd f filepath = cmd filepath >>= (return . intersperse "  " <=< f) >>= mapM_ putStr >> putStrLn ""
+
+-- TODO: color compatibility
+lsLong :: (FilePath -> IO [FilePath]) -> ([FilePath] -> IO [FilePath]) -> FilePath -> IO ()
+-- lsLong cmd f filepath = cmd filepath >>= f >>= mapM_ (putStrLn <=< long)
+lsLong cmd f filepath = cmd filepath >>= mapM_ (putStr <=< long)
+  where
+    long filename = do
+        ft <- fileType (filepath ++ "/" ++ filename)
+        permissions <- getPermissions (filepath ++ "/" ++ filename)
+        -- TODO: hacky doesn't work for sorters
+        newfilename <- f [filename]
+        if null newfilename
+            then return ""
+            else return $ ft : displayPermissions permissions ++ (' ' : head newfilename) ++ "\n"
+    fileType filepath = do
+        dir <- doesDirectoryExist filepath
+        if dir
+            then return 'd'
+            else do
+                symlink <- pathIsSymbolicLink filepath
+                -- TODO: character file?
+                if symlink then return 'l' else return '-'
+
+displayPermissions :: Permissions -> String
+displayPermissions p = [if readable p then 'r' else '-', if writable p then 'w' else '-', if executable p then 'x' else '-']
 
 colorEntry :: FilePath -> FilePath -> IO FilePath
 colorEntry root filename = do
