@@ -21,8 +21,8 @@ maintainer:         elliotgreybobrow@gmail.com
 -- category:
 extra-source-files: CHANGELOG.md
 
-executable coreutils-hs
-    main-is:          Main.hs
+executable ls
+    main-is:          ls/Main.hs
 
     -- Modules included in this executable, other than Main.
     -- other-modules:
@@ -33,5 +33,7 @@ executable coreutils-hs
         base ^>=4.14.3.0
       , directory
       , cmdargs
+      , unix
+      , unix-time
     hs-source-dirs:   app
     default-language: Haskell2010

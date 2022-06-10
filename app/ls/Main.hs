@@ -1,4 +1,5 @@
 {-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS_GHC -fno-cse #-}
 
 module Main where
@@ -9,9 +10,12 @@ import Data.Char
 import Data.Function
 import Data.Functor
 import Data.List
+import Data.UnixTime
 import System.Console.CmdArgs
 import System.Directory
 import System.Environment
+import System.Posix.Files
+import System.Posix.User
 
 data Color = NEVER | ALWAYS | AUTO deriving (Show, Enum, Data, Eq)
 
@@ -33,7 +37,7 @@ defaultArgs =
         , reverse_ = False &= name "r" &= help "reverse order while sorting"
         , directory = False &= name "d" &= help "list directories themselves, not their contents"
         , l = False &= help "use a long listing format"
-        , color = NEVER &= typ "WHEN" &= help "color the output WHEN"
+        , color = ALWAYS &= typ "WHEN" &= help "color the output WHEN"
         , path = [] &= args &= typFile
         }
 
@@ -52,13 +56,13 @@ main = do
         _ -> mapM_ liftIO $ intersperse (putStrLn "") $ map (\p -> putStrLn (p ++ ":") >> cmd p) (path args)
 
 genCmd :: Args -> FilePath -> IO ()
-genCmd args filepath = lsF (lsCmd args) (chainFs args) filepath
+genCmd args filepath = lsF (lsCmd args) (chainFs args) (colorF filepath args) filepath
   where
     lsF
         | l args = lsLong
         | otherwise = ls
     chainFs args = foldr1 (<=<) $ map ($ args) fs
-    fs = [colorF filepath, sorterF, hiddenF]
+    fs = [sorterF, hiddenF]
 
 sorterF :: Args -> ([FilePath] -> IO [FilePath])
 sorterF args
@@ -79,11 +83,11 @@ hiddenF args
     isHidden _ = False
     isImpliedEntry filepath = (filepath == ".") || (filepath == "..")
 
-colorF :: FilePath -> Args -> ([FilePath] -> IO [FilePath])
+colorF :: FilePath -> Args -> (FilePath -> IO FilePath)
 -- TODO: color=AUTO
 colorF root args =
     if color args == ALWAYS
-        then if directory args then mapM $ colorEntry "" else mapM $ colorEntry root
+        then if directory args then colorEntry "" else colorEntry root
         else return
 
 lsCmd :: Args -> (FilePath -> IO [FilePath])
@@ -91,22 +95,25 @@ lsCmd args
     | directory args = return . return
     | otherwise = getDirectoryContents
 
-ls :: (FilePath -> IO [FilePath]) -> ([FilePath] -> IO [FilePath]) -> FilePath -> IO ()
-ls cmd f filepath = cmd filepath >>= (return . intersperse "  " <=< f) >>= mapM_ putStr >> putStrLn ""
+ls :: (FilePath -> IO [FilePath]) -> ([FilePath] -> IO [FilePath]) -> (FilePath -> IO FilePath) -> FilePath -> IO ()
+ls cmd f color filepath = cmd filepath >>= (return . intersperse "  " <=< mapM color <=< f) >>= mapM_ putStr >> putStrLn ""
 
--- TODO: color compatibility
-lsLong :: (FilePath -> IO [FilePath]) -> ([FilePath] -> IO [FilePath]) -> FilePath -> IO ()
--- lsLong cmd f filepath = cmd filepath >>= f >>= mapM_ (putStrLn <=< long)
-lsLong cmd f filepath = cmd filepath >>= mapM_ (putStr <=< long)
+-- TODO: line that goes `total: ___` (is this recursive?)
+lsLong :: (FilePath -> IO [FilePath]) -> ([FilePath] -> IO [FilePath]) -> (FilePath -> IO FilePath) -> FilePath -> IO ()
+lsLong cmd f color filepath = cmd filepath >>= f >>= mapM_ (putStrLn <=< long)
   where
     long filename = do
-        ft <- fileType (filepath ++ "/" ++ filename)
-        permissions <- getPermissions (filepath ++ "/" ++ filename)
-        -- TODO: hacky doesn't work for sorters
-        newfilename <- f [filename]
-        if null newfilename
-            then return ""
-            else return $ ft : displayPermissions permissions ++ (' ' : head newfilename) ++ "\n"
+        ft <- fileType fullPath
+        permissions <- getPermissions fullPath
+        colored <- color filename
+        fileStatus <- getFileStatus fullPath
+        owner <- userName <$> getUserEntryForID (fileOwner fileStatus)
+        size <- getFileSize fullPath
+        modTime <- formatUnixTime "%b %-d %H:%M" $ fromEpochTime $ modificationTime fileStatus
+        -- TODO: each of these will be a separate `putStr` for alignment; use `ByteString.putStr` for modTime
+        return $ intercalate "    " [ft : displayPermissions permissions, owner, show size, show modTime, colored]
+      where
+        fullPath = filepath ++ "/" ++ filename
     fileType filepath = do
         dir <- doesDirectoryExist filepath
         if dir
