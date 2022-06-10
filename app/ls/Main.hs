@@ -98,9 +98,8 @@ lsCmd args
 ls :: (FilePath -> IO [FilePath]) -> ([FilePath] -> IO [FilePath]) -> (FilePath -> IO FilePath) -> FilePath -> IO ()
 ls cmd f color filepath = cmd filepath >>= (return . intersperse "  " <=< mapM color <=< f) >>= mapM_ putStr >> putStrLn ""
 
--- TODO: line that goes `total: ___` (is this recursive?)
 lsLong :: (FilePath -> IO [FilePath]) -> ([FilePath] -> IO [FilePath]) -> (FilePath -> IO FilePath) -> FilePath -> IO ()
-lsLong cmd f color filepath = cmd filepath >>= f >>= mapM_ (putStrLn <=< long)
+lsLong cmd f color filepath = cmd filepath >>= f >>= mapM long >>= (mapM_ (putStrLn . unwords) . pad)
   where
     long filename = do
         ft <- fileType fullPath
@@ -110,8 +109,7 @@ lsLong cmd f color filepath = cmd filepath >>= f >>= mapM_ (putStrLn <=< long)
         owner <- userName <$> getUserEntryForID (fileOwner fileStatus)
         size <- getFileSize fullPath
         modTime <- formatUnixTime "%b %-d %H:%M" $ fromEpochTime $ modificationTime fileStatus
-        -- TODO: each of these will be a separate `putStr` for alignment; use `ByteString.putStr` for modTime
-        return $ intercalate "    " [ft : displayPermissions permissions, owner, show size, show modTime, colored]
+        return [ft : displayPermissions permissions, owner, show size, show modTime, colored]
       where
         fullPath = filepath ++ "/" ++ filename
     fileType filepath = do
@@ -122,6 +120,14 @@ lsLong cmd f color filepath = cmd filepath >>= f >>= mapM_ (putStrLn <=< long)
                 symlink <- pathIsSymbolicLink filepath
                 -- TODO: character file?
                 if symlink then return 'l' else return '-'
+
+pad :: [[String]] -> [[String]]
+pad = rotate . addSpaces . rotate
+  where
+    addSpaces list = zipWith (\l xs -> map (\x -> x ++ replicate (l - length x) ' ') xs) (map longest list) list
+    longest = maximum . map length
+    rotate xs = map (`nth` xs) [0 .. length (head xs) - 1]
+    nth n = map (!! n)
 
 displayPermissions :: Permissions -> String
 displayPermissions p = [if readable p then 'r' else '-', if writable p then 'w' else '-', if executable p then 'x' else '-']
